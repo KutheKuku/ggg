@@ -2,7 +2,7 @@
 -- BULLET-DROP LASER + GUI + ESP OUTLINE  (standalone, paste & run)
 -- Draggable panel: toggle on/off + live sliders for thickness, speed,
 -- gravity (drop) and range. Auto-detects guns (re-equip safe).
--- ESP outline highlights enemy characters.
+-- ESP outline highlights enemy characters with team-based colors.
 -- ===========================================================================
 
 local RunService = game:GetService("RunService")
@@ -22,8 +22,16 @@ local cfg = {
 	range    = 3000,                -- total beam length
 	segments = 60,                  -- curve smoothness (fixed)
 	espEnabled = true,              -- ESP outline toggle
-	espColor = Color3.fromRGB(255, 0, 255),  -- ESP outline color
-	espThickness = 1,               -- ESP outline thickness
+	useTeamColors = true,           -- Use team-based colors for ESP
+}
+
+-- Team-based ESP colors
+local teamColors = {
+	Yoromoto = Color3.fromRGB(0, 0, 0),        -- Black
+	Renetti = Color3.fromRGB(0, 255, 0),       -- Green
+	Alamont = Color3.fromRGB(128, 128, 128),   -- Grey
+	Bergman = Color3.fromRGB(139, 69, 19),     -- Brown
+	Halfwell = Color3.fromRGB(0, 0, 255),      -- Blue
 }
 
 -- Guns to attach a laser to.
@@ -49,20 +57,36 @@ local function isEnemyCharacter(inst)
 	return false
 end
 
+-- Get team color for a player
+local function getTeamColor(player)
+	if not cfg.useTeamColors then
+		return Color3.fromRGB(255, 0, 255)  -- Default magenta
+	end
+	
+	if player.Team then
+		local teamName = player.Team.Name
+		return teamColors[teamName] or Color3.fromRGB(255, 0, 255)
+	end
+	
+	return Color3.fromRGB(255, 0, 255)  -- Default magenta if no team
+end
+
 -- ====================== ESP OUTLINE LOGIC ==================================
 local espOutlines = {}  -- [character] = highlight object
 
-local function addESPOutline(character)
+local function addESPOutline(character, player)
 	if espOutlines[character] then return end
 	
 	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
 	if not humanoidRootPart then return end
 	
-	-- Use Highlight if available, otherwise fall back to simple visualization
+	local espColor = getTeamColor(player)
+	
+	-- Use Highlight if available
 	local highlight = Instance.new("Highlight")
 	highlight.Adornee = character
-	highlight.FillColor = cfg.espColor
-	highlight.OutlineColor = cfg.espColor
+	highlight.FillColor = espColor
+	highlight.OutlineColor = espColor
 	highlight.FillTransparency = 0.5
 	highlight.OutlineTransparency = 0
 	highlight.Parent = character
@@ -90,11 +114,12 @@ local function updateESPOutlines()
 		if player ~= plr and player.Character then
 			local character = player.Character
 			if not espOutlines[character] then
-				addESPOutline(character)
+				addESPOutline(character, player)
 			else
-				-- Update color
-				espOutlines[character].FillColor = cfg.espColor
-				espOutlines[character].OutlineColor = cfg.espColor
+				-- Update color in case team changed
+				local newColor = getTeamColor(player)
+				espOutlines[character].FillColor = newColor
+				espOutlines[character].OutlineColor = newColor
 			end
 		end
 	end
@@ -112,11 +137,11 @@ Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
 		if player ~= plr then
 			task.wait(0.1)
-			addESPOutline(character)
+			addESPOutline(character, player)
 		end
 	end)
 	if player.Character then
-		addESPOutline(player.Character)
+		addESPOutline(player.Character, player)
 	end
 end)
 
@@ -124,6 +149,17 @@ Players.PlayerRemoving:Connect(function(player)
 	if player.Character then
 		removeESPOutline(player.Character)
 	end
+end)
+
+-- Monitor team changes
+Players.PlayerAdded:Connect(function(player)
+	player:GetPropertyChangedSignal("Team"):Connect(function()
+		if player.Character and player ~= plr then
+			removeESPOutline(player.Character)
+			task.wait(0.1)
+			addESPOutline(player.Character, player)
+		end
+	end)
 end)
 
 -- ====================== LASER LOGIC ========================================
@@ -253,7 +289,7 @@ gui.Parent = parent
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 250, 0, 380)
+main.Size = UDim2.new(0, 250, 0, 420)
 main.Position = UDim2.new(0, 40, 0, 120)
 main.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
 main.BorderSizePixel = 0
@@ -483,12 +519,21 @@ addHeader("ESP OUTLINE")
 addToggle("ESP: ON", "ESP: OFF", cfg.espEnabled, function(state)
 	cfg.espEnabled = state
 end)
-local espRGB = { math.floor(cfg.espColor.R * 255 + 0.5), math.floor(cfg.espColor.G * 255 + 0.5), math.floor(cfg.espColor.B * 255 + 0.5) }
-local function applyESP()
-	cfg.espColor = Color3.fromRGB(espRGB[1], espRGB[2], espRGB[3])
-end
-createSlider("Red",   0, 255, espRGB[1], 0, function(v) espRGB[1] = v applyESP() end)
-createSlider("Green", 0, 255, espRGB[2], 0, function(v) espRGB[2] = v applyESP() end)
-createSlider("Blue",  0, 255, espRGB[3], 0, function(v) espRGB[3] = v applyESP() end)
+addToggle("Team Colors: ON", "Team Colors: OFF", cfg.useTeamColors, function(state)
+	cfg.useTeamColors = state
+end)
 
-print("Laser GUI with ESP loaded.")
+-- Display team color reference
+local teamInfo = Instance.new("TextLabel")
+teamInfo.Size = UDim2.new(1, 0, 0, 90)
+teamInfo.BackgroundTransparency = 1
+teamInfo.Text = "Teams:\n• Yoromoto: Black\n• Renetti: Green\n• Alamont: Grey\n• Bergman: Brown\n• Halfwell: Blue"
+teamInfo.Font = Enum.Font.Gotham
+teamInfo.TextSize = 11
+teamInfo.TextColor3 = Color3.fromRGB(180, 180, 190)
+teamInfo.TextXAlignment = Enum.TextXAlignment.Left
+teamInfo.TextYAlignment = Enum.TextYAlignment.Top
+teamInfo.LayoutOrder = nextOrder()
+teamInfo.Parent = content
+
+print("Laser GUI with Team-Based ESP loaded.")
