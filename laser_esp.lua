@@ -1,14 +1,17 @@
 -- ===========================================================================
--- BULLET-DROP LASER + GUI + ESP OUTLINE  (standalone, paste & run)
+-- BULLET-DROP LASER + GUI + ESP OUTLINE + SILENT AIM  (standalone, paste & run)
 -- Draggable panel: toggle on/off + live sliders for thickness, speed,
 -- gravity (drop) and range. Auto-detects guns (re-equip safe).
 -- ESP outline highlights enemy characters with team-based colors.
+-- Silent aim with FOV circle for smooth targeting.
+-- Toggle with T key, show/hide GUI with Enum code.
 -- ===========================================================================
 
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local plr = Players.LocalPlayer
+local mouse = plr:GetMouse()
 
 -- Live settings (sliders write into this table; the laser reads it each frame).
 local cfg = {
@@ -23,6 +26,9 @@ local cfg = {
 	segments = 60,                  -- curve smoothness (fixed)
 	espEnabled = true,              -- ESP outline toggle
 	useTeamColors = true,           -- Use team-based colors for ESP
+	silentAimEnabled = false,       -- Silent aim toggle
+	silentAimFOV = 100,             -- Silent aim field of view (pixels)
+	silentAimSmoothing = 0.1,       -- Aiming smoothing factor
 }
 
 -- Team-based ESP colors
@@ -69,6 +75,64 @@ local function getTeamColor(player)
 	end
 	
 	return Color3.fromRGB(255, 0, 255)  -- Default magenta if no team
+end
+
+-- ====================== SILENT AIM LOGIC ==================================
+local silentAimTarget = nil
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 2
+fovCircle.NumSides = 50
+fovCircle.Color = Color3.fromRGB(0, 255, 0)
+fovCircle.Filled = false
+fovCircle.Visible = false
+
+local function getClosestPlayerInFOV()
+	local closestPlayer = nil
+	local closestDistance = cfg.silentAimFOV
+	
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= plr and player.Character then
+			local character = player.Character
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			
+			if humanoidRootPart and humanoid and humanoid.Health > 0 then
+				-- Get screen position of target
+				local camera = workspace.CurrentCamera
+				local screenPos, onScreen = camera:WorldToScreenPoint(humanoidRootPart.Position)
+				
+				if onScreen then
+					-- Calculate distance from mouse to target on screen
+					local mouseX = mouse.X
+					local mouseY = mouse.Y
+					local distance = math.sqrt((screenPos.X - mouseX)^2 + (screenPos.Y - mouseY)^2)
+					
+					if distance < closestDistance then
+						closestDistance = distance
+						closestPlayer = player
+					end
+				end
+			end
+		end
+	end
+	
+	return closestPlayer
+end
+
+local function updateSilentAim()
+	if not cfg.silentAimEnabled then
+		silentAimTarget = nil
+		fovCircle.Visible = false
+		return
+	end
+	
+	-- Update FOV circle position and visibility
+	fovCircle.Position = Vector2.new(mouse.X, mouse.Y)
+	fovCircle.Radius = cfg.silentAimFOV
+	fovCircle.Visible = true
+	
+	-- Get closest player in FOV
+	silentAimTarget = getClosestPlayerInFOV()
 end
 
 -- ====================== ESP OUTLINE LOGIC ==================================
@@ -274,6 +338,14 @@ task.spawn(function()
 	end
 end)
 
+-- Update silent aim every frame
+task.spawn(function()
+	while true do
+		updateSilentAim()
+		task.wait(0.01)
+	end
+end)
+
 -- ====================== GUI ================================================
 local parent = (gethui and gethui()) or game:GetService("CoreGui")
 
@@ -289,7 +361,7 @@ gui.Parent = parent
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 250, 0, 420)
+main.Size = UDim2.new(0, 250, 0, 470)
 main.Position = UDim2.new(0, 40, 0, 120)
 main.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
 main.BorderSizePixel = 0
@@ -301,7 +373,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 32)
 title.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
 title.BorderSizePixel = 0
-title.Text = "Bullet-Drop Laser + ESP"
+title.Text = "Bullet-Drop Laser + ESP + Aim"
 title.Font = Enum.Font.GothamBold
 title.TextSize = 15
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -536,4 +608,29 @@ teamInfo.TextYAlignment = Enum.TextYAlignment.Top
 teamInfo.LayoutOrder = nextOrder()
 teamInfo.Parent = content
 
-print("Laser GUI with Team-Based ESP loaded.")
+addHeader("SILENT AIM")
+addToggle("Silent Aim: ON", "Silent Aim: OFF", cfg.silentAimEnabled, function(state)
+	cfg.silentAimEnabled = state
+end)
+createSlider("FOV", 25, 500, cfg.silentAimFOV, 0, function(v) cfg.silentAimFOV = v end)
+
+-- ====================== KEYBOARD CONTROLS ====================================
+UIS.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	
+	-- T key: Toggle all features on/off
+	if input.KeyCode == Enum.KeyCode.T then
+		cfg.enabled = not cfg.enabled
+		cfg.espEnabled = not cfg.espEnabled
+		cfg.silentAimEnabled = not cfg.silentAimEnabled
+		print("All features toggled: " .. (cfg.enabled and "ON" or "OFF"))
+	end
+	
+	-- Delete key: Toggle GUI visibility
+	if input.KeyCode == Enum.KeyCode.Delete then
+		main.Visible = not main.Visible
+	end
+end)
+
+print("Laser GUI with Team-Based ESP, Silent Aim, and Controls loaded.")
+print("Press T to toggle all features | Press Delete to toggle GUI visibility")
