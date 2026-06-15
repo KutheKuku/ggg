@@ -4,7 +4,8 @@
 -- gravity (drop) and range. Auto-detects guns (re-equip safe).
 -- ESP outline highlights enemy characters with team-based colors.
 -- Silent aim with FOV circle for smooth targeting.
--- Toggle with T key, show/hide GUI with Enum code.
+-- Auto-fires when laser hits enemy humanoid.
+-- Toggle with T key, show/hide GUI with Delete key.
 -- ===========================================================================
 
 local RunService = game:GetService("RunService")
@@ -25,20 +26,57 @@ local cfg = {
 	range    = 3000,                -- total beam length
 	segments = 60,                  -- curve smoothness (fixed)
 	espEnabled = true,              -- ESP outline toggle
-	useTeamColors = true,           -- Use team-based colors for ESP
+	useTeamColors = true,           -- Use team-based ESP colors
 	silentAimEnabled = false,       -- Silent aim toggle
 	silentAimFOV = 100,             -- Silent aim field of view (pixels)
 	silentAimSmoothing = 0.1,       -- Aiming smoothing factor
 }
 
--- Team-based ESP colors
-local teamColors = {
-	Yoromoto = Color3.fromRGB(0, 0, 0),        -- Black
-	Renetti = Color3.fromRGB(0, 255, 0),       -- Green
-	Alamont = Color3.fromRGB(128, 128, 128),   -- Grey
-	Bergman = Color3.fromRGB(139, 69, 19),     -- Brown
-	Halfwell = Color3.fromRGB(0, 0, 255),      -- Blue
-}
+-- Team-based ESP colors (default colors for teams)
+local teamColors = {}
+
+local function getTeamColor(player)
+	if not cfg.useTeamColors or not player.Team then
+		return Color3.fromRGB(255, 0, 255)  -- Default magenta for no team
+	end
+	
+	local teamName = player.Team.Name
+	
+	-- If we haven't cached this team's color, generate one
+	if not teamColors[teamName] then
+		-- Generate a consistent color based on team name hash
+		local hash = 0
+		for i = 1, #teamName do
+			hash = (hash * 31 + string.byte(teamName, i)) % 1000
+		end
+		
+		local hue = (hash / 1000) * 360
+		local saturation = 0.7
+		local brightness = 0.9
+		
+		-- Convert HSB to RGB
+		local c = brightness * saturation
+		local h = hue / 60
+		local x = c * (1 - math.abs(h % 2 - 1))
+		local m = brightness - c
+		
+		local r, g, b = 0, 0, 0
+		if h < 1 then r, g, b = c, x, 0
+		elseif h < 2 then r, g, b = x, c, 0
+		elseif h < 3 then r, g, b = 0, c, x
+		elseif h < 4 then r, g, b = 0, x, c
+		elseif h < 5 then r, g, b = x, 0, c
+		else r, g, b = c, 0, x end
+		
+		teamColors[teamName] = Color3.fromRGB(
+			math.floor((r + m) * 255),
+			math.floor((g + m) * 255),
+			math.floor((b + m) * 255)
+		)
+	end
+	
+	return teamColors[teamName]
+end
 
 -- Guns to attach a laser to.
 local gunNames = {
@@ -51,34 +89,39 @@ local function getCF(x)
 	return x:IsA("Attachment") and x.WorldCFrame or x.CFrame
 end
 
--- True if the part belongs to another player's / NPC character.
+-- Check if the part belongs to an enemy character (different team or no team)
 local function isEnemyCharacter(inst)
 	local model = inst and inst:FindFirstAncestorWhichIsA("Model")
 	while model do
 		if model:FindFirstChildOfClass("Humanoid") then
-			return model ~= plr.Character
+			if model == plr.Character then
+				return false
+			end
+			-- Check if it's a different player
+			local isPlayer = false
+			for _, player in pairs(Players:GetPlayers()) do
+				if player.Character == model then
+					isPlayer = true
+					-- Check teams: only enemy if different team or one has no team
+					if plr.Team and player.Team then
+						return plr.Team ~= player.Team
+					else
+						return true  -- Different teams or no team
+					end
+				end
+			end
+			return isPlayer
 		end
 		model = model:FindFirstAncestorWhichIsA("Model")
 	end
 	return false
 end
 
--- Get team color for a player
-local function getTeamColor(player)
-	if not cfg.useTeamColors then
-		return Color3.fromRGB(255, 0, 255)  -- Default magenta
-	end
-	
-	if player.Team then
-		local teamName = player.Team.Name
-		return teamColors[teamName] or Color3.fromRGB(255, 0, 255)
-	end
-	
-	return Color3.fromRGB(255, 0, 255)  -- Default magenta if no team
-end
-
 -- ====================== SILENT AIM LOGIC ==================================
 local silentAimTarget = nil
+local lastShotTime = 0
+local shotCooldown = 0.1  -- Cooldown between shots in seconds
+
 local fovCircle = Drawing.new("Circle")
 fovCircle.Thickness = 2
 fovCircle.NumSides = 50
@@ -97,19 +140,29 @@ local function getClosestPlayerInFOV()
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			
 			if humanoidRootPart and humanoid and humanoid.Health > 0 then
-				-- Get screen position of target
-				local camera = workspace.CurrentCamera
-				local screenPos, onScreen = camera:WorldToScreenPoint(humanoidRootPart.Position)
+				-- Check if enemy (different team or no team)
+				local isEnemy = false
+				if plr.Team and player.Team then
+					isEnemy = plr.Team ~= player.Team
+				else
+					isEnemy = true
+				end
 				
-				if onScreen then
-					-- Calculate distance from mouse to target on screen
-					local mouseX = mouse.X
-					local mouseY = mouse.Y
-					local distance = math.sqrt((screenPos.X - mouseX)^2 + (screenPos.Y - mouseY)^2)
+				if isEnemy then
+					-- Get screen position of target
+					local camera = workspace.CurrentCamera
+					local screenPos, onScreen = camera:WorldToScreenPoint(humanoidRootPart.Position)
 					
-					if distance < closestDistance then
-						closestDistance = distance
-						closestPlayer = player
+					if onScreen then
+						-- Calculate distance from mouse to target on screen
+						local mouseX = mouse.X
+						local mouseY = mouse.Y
+						local distance = math.sqrt((screenPos.X - mouseX)^2 + (screenPos.Y - mouseY)^2)
+						
+						if distance < closestDistance then
+							closestDistance = distance
+							closestPlayer = player
+						end
 					end
 				end
 			end
@@ -136,7 +189,7 @@ local function updateSilentAim()
 end
 
 -- ====================== ESP OUTLINE LOGIC ==================================
-local espOutlines = {}  -- [character] = highlight object
+local espOutlines = {}  -- [character] = {highlight, player}
 
 local function addESPOutline(character, player)
 	if espOutlines[character] then return end
@@ -155,12 +208,12 @@ local function addESPOutline(character, player)
 	highlight.OutlineTransparency = 0
 	highlight.Parent = character
 	
-	espOutlines[character] = highlight
+	espOutlines[character] = { highlight = highlight, player = player }
 end
 
 local function removeESPOutline(character)
 	if espOutlines[character] then
-		espOutlines[character]:Destroy()
+		espOutlines[character].highlight:Destroy()
 		espOutlines[character] = nil
 	end
 end
@@ -177,13 +230,26 @@ local function updateESPOutlines()
 	for _, player in pairs(Players:GetPlayers()) do
 		if player ~= plr and player.Character then
 			local character = player.Character
-			if not espOutlines[character] then
-				addESPOutline(character, player)
+			-- Check if enemy
+			local isEnemy = false
+			if plr.Team and player.Team then
+				isEnemy = plr.Team ~= player.Team
 			else
-				-- Update color in case team changed
-				local newColor = getTeamColor(player)
-				espOutlines[character].FillColor = newColor
-				espOutlines[character].OutlineColor = newColor
+				isEnemy = true
+			end
+			
+			if isEnemy then
+				if not espOutlines[character] then
+					addESPOutline(character, player)
+				else
+					-- Update color in case team changed
+					local newColor = getTeamColor(player)
+					espOutlines[character].highlight.FillColor = newColor
+					espOutlines[character].highlight.OutlineColor = newColor
+				end
+			else
+				-- Not an enemy, remove outline if it exists
+				removeESPOutline(character)
 			end
 		end
 	end
@@ -201,11 +267,23 @@ Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
 		if player ~= plr then
 			task.wait(0.1)
-			addESPOutline(character, player)
+			if plr.Team and player.Team then
+				if plr.Team ~= player.Team then
+					addESPOutline(character, player)
+				end
+			else
+				addESPOutline(character, player)
+			end
 		end
 	end)
 	if player.Character then
-		addESPOutline(player.Character, player)
+		if plr.Team and player.Team then
+			if plr.Team ~= player.Team then
+				addESPOutline(player.Character, player)
+			end
+		else
+			addESPOutline(player.Character, player)
+		end
 	end
 end)
 
@@ -215,13 +293,20 @@ Players.PlayerRemoving:Connect(function(player)
 	end
 end)
 
--- Monitor team changes
+-- Monitor team changes for dynamic color updates
 Players.PlayerAdded:Connect(function(player)
 	player:GetPropertyChangedSignal("Team"):Connect(function()
 		if player.Character and player ~= plr then
 			removeESPOutline(player.Character)
-			task.wait(0.1)
-			addESPOutline(player.Character, player)
+			task.wait(0.05)
+			-- Re-check if still enemy
+			if plr.Team and player.Team then
+				if plr.Team ~= player.Team then
+					addESPOutline(player.Character, player)
+				end
+			else
+				addESPOutline(player.Character, player)
+			end
 		end
 	end)
 end)
@@ -277,17 +362,30 @@ local function makeArc(muzzle)
 		local prev = startPos
 		local detected = false
 		local onTarget = false
+		local hitInstance = nil
 		for s = 1, cfg.segments do
 			local t = s * dt
 			local nextPos = startPos + velocity * t + 0.5 * gravity * (t * t)
 			local len = (nextPos - prev).Magnitude
 
-			-- Detect what the path first hits (enemy humanoid -> recolor).
+			-- Detect what the path first hits (enemy humanoid -> recolor and auto-fire).
 			if not detected and len > 0 then
 				local hit = workspace:Raycast(prev, nextPos - prev, rayParams)
 				if hit then
 					detected = true
 					onTarget = isEnemyCharacter(hit.Instance)
+					hitInstance = hit.Instance
+					
+					-- Auto-fire when laser hits enemy humanoid
+					if onTarget and cfg.silentAimEnabled then
+						local currentTime = tick()
+						if currentTime - lastShotTime >= shotCooldown then
+							mouse1press()
+							task.wait(0.05)
+							mouse1release()
+							lastShotTime = currentTime
+						end
+					end
 				end
 			end
 
@@ -361,7 +459,7 @@ gui.Parent = parent
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 250, 0, 470)
+main.Size = UDim2.new(0, 250, 0, 490)
 main.Position = UDim2.new(0, 40, 0, 120)
 main.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
 main.BorderSizePixel = 0
@@ -594,19 +692,6 @@ end)
 addToggle("Team Colors: ON", "Team Colors: OFF", cfg.useTeamColors, function(state)
 	cfg.useTeamColors = state
 end)
-
--- Display team color reference
-local teamInfo = Instance.new("TextLabel")
-teamInfo.Size = UDim2.new(1, 0, 0, 90)
-teamInfo.BackgroundTransparency = 1
-teamInfo.Text = "Teams:\n• Yoromoto: Black\n• Renetti: Green\n• Alamont: Grey\n• Bergman: Brown\n• Halfwell: Blue"
-teamInfo.Font = Enum.Font.Gotham
-teamInfo.TextSize = 11
-teamInfo.TextColor3 = Color3.fromRGB(180, 180, 190)
-teamInfo.TextXAlignment = Enum.TextXAlignment.Left
-teamInfo.TextYAlignment = Enum.TextYAlignment.Top
-teamInfo.LayoutOrder = nextOrder()
-teamInfo.Parent = content
 
 addHeader("SILENT AIM")
 addToggle("Silent Aim: ON", "Silent Aim: OFF", cfg.silentAimEnabled, function(state)
